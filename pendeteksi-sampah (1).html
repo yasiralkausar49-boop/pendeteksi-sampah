@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pendeteksi Sampah Organik &amp; Anorganik</title>
+<style>
+:root{--bg:#f4f7f2;--card:#fff;--tx:#1b2a1f;--mut:#66736a;--bd:#dbe4d9;--org:#2e7d32;--orgbg:#e3f3e4;--ino:#1565c0;--inobg:#e1edfa;--btn:#2e7d32;--btntx:#fff}
+@media(prefers-color-scheme:dark){:root{--bg:#121a14;--card:#1b261e;--tx:#e8f0e9;--mut:#9bab9f;--bd:#2c3b2f;--org:#7ed482;--orgbg:#1d3a20;--ino:#82b8f5;--inobg:#1a2e45;--btn:#4caf50;--btntx:#0c1a0e}}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--tx);padding:16px}
+main{max-width:640px;margin:0 auto}
+h1{font-size:1.5rem;margin:8px 0 4px}
+p.sub{color:var(--mut);margin:0 0 16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:16px;margin-bottom:16px}
+.tabs{display:flex;gap:8px;margin-bottom:12px}
+.tabs button{flex:1}
+button{font:inherit;cursor:pointer;border-radius:10px;border:1px solid var(--bd);background:var(--card);color:var(--tx);padding:10px 14px}
+button.on,button.main{background:var(--btn);color:var(--btntx);border-color:var(--btn);font-weight:600}
+button:disabled{opacity:.5;cursor:not-allowed}
+.stage{position:relative;background:#0002;border-radius:12px;overflow:hidden;min-height:200px;display:flex;align-items:center;justify-content:center}
+video,#preview{max-width:100%;max-height:360px;display:none}
+.hint{color:var(--mut);padding:24px;text-align:center}
+.row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.row>*{flex:1}
+#status{font-size:.9rem;color:var(--mut);margin:0 0 12px}
+.bar{height:6px;background:var(--bd);border-radius:4px;overflow:hidden;margin-top:6px}
+.bar i{display:block;height:100%;background:var(--btn);width:0}
+.badge{display:inline-block;padding:6px 14px;border-radius:999px;font-weight:700;font-size:1.05rem}
+.organik{background:var(--orgbg);color:var(--org)}
+.anorganik{background:var(--inobg);color:var(--ino)}
+.bukan{background:var(--bd);color:var(--mut)}
+.hist{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-top:1px solid var(--bd);font-size:.9rem}
+.hist small{color:var(--mut)}
+.name{font-size:1.6rem;font-weight:700;margin:10px 0 2px}
+.tip{color:var(--mut);margin:0 0 12px}
+.top{display:flex;align-items:center;gap:8px;font-size:.9rem;margin-top:6px}
+.top span:first-child{flex:0 0 150px}
+.top .bar{flex:1;margin:0}
+.top b{flex:0 0 46px;text-align:right}
+.warn{background:#fff3cd;color:#664d03;border-radius:10px;padding:8px 12px;margin-top:12px;font-size:.9rem}
+footer{color:var(--mut);font-size:.8rem;text-align:center}
+</style>
+</head>
+<body>
+<main>
+<h1>♻️ Pendeteksi Sampah Organik &amp; Anorganik</h1>
+<p class="sub">Ambil foto lewat kamera atau unggah gambar, lalu AI akan menebak jenis dan nama sampahnya.</p>
+
+<div class="card">
+  <p id="status">Memuat model AI (sekitar 90 MB, hanya sekali)…</p>
+  <div class="bar" id="loadbar"><i id="loadfill"></i></div>
+</div>
+
+<div class="card">
+  <div class="tabs">
+    <button id="tabCam" class="on">📷 Kamera</button>
+    <button id="tabFile">🖼️ Unggah File</button>
+  </div>
+  <div class="stage">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="preview"></canvas>
+    <div class="hint" id="hint">Pilih kamera atau file untuk memulai</div>
+  </div>
+  <div class="row" id="camRow">
+    <button id="btnStart">Nyalakan Kamera</button>
+    <button id="btnSnap" class="main" disabled>Ambil &amp; Deteksi</button>
+  </div>
+  <div class="row" id="fileRow" style="display:none">
+    <input type="file" id="file" accept="image/*" hidden>
+    <button id="btnPick" class="main">Pilih Gambar &amp; Deteksi</button>
+  </div>
+</div>
+
+<div class="card" id="result" style="display:none"></div>
+<div class="card" id="history" style="display:none"></div>
+<footer>Model: CLIP (zero-shot) via Transformers.js · Hasil berupa perkiraan, tinggi skor tidak selalu berarti benar.</footer>
+</main>
+
+<script type="module">
+import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2";
+env.allowLocalModels = false;
+
+// [label Inggris untuk model, nama Indonesia, jenis, saran]
+const D = [
+ ["a banana peel","Kulit pisang","organik","Bisa dijadikan kompos."],
+ ["an orange peel","Kulit jeruk","organik","Bisa dijadikan kompos atau eco-enzyme."],
+ ["leftover cooked rice","Sisa nasi","organik","Masukkan ke komposter atau pakan ternak."],
+ ["leftover food","Sisa makanan","organik","Olah menjadi kompos."],
+ ["fruit scraps","Sisa buah","organik","Bisa dikomposkan."],
+ ["vegetable scraps","Sisa sayuran","organik","Bisa dikomposkan."],
+ ["dry leaves","Daun kering","organik","Cocok untuk kompos atau mulsa."],
+ ["a twig or tree branch","Ranting","organik","Bisa dikomposkan atau jadi kayu bakar."],
+ ["eggshells","Cangkang telur","organik","Bisa ditumbuk untuk pupuk."],
+ ["coffee grounds","Ampas kopi","organik","Bagus untuk pupuk tanaman."],
+ ["fish bones","Tulang ikan","organik","Bisa dikomposkan."],
+ ["a plastic bottle","Botol plastik","anorganik","Cuci, lalu setor ke bank sampah."],
+ ["a plastic bag","Kantong plastik","anorganik","Gunakan ulang atau buang ke tempat sampah anorganik."],
+ ["plastic food packaging","Kemasan plastik","anorganik","Pisahkan dari sampah organik."],
+ ["a plastic cup","Gelas plastik","anorganik","Bilas dan daur ulang."],
+ ["a metal can","Kaleng","anorganik","Dapat didaur ulang."],
+ ["a glass bottle","Botol kaca","anorganik","Dapat didaur ulang, hati-hati pecah."],
+ ["styrofoam","Styrofoam","anorganik","Sulit terurai, kurangi pemakaiannya."],
+ ["paper","Kertas","anorganik","Dapat didaur ulang jika kering dan bersih."],
+ ["a cardboard box","Kardus","anorganik","Lipat dan setor untuk didaur ulang."],
+ ["a cigarette butt","Puntung rokok","anorganik","Buang ke tempat sampah residu."],
+ ["a rubber tire or rubber","Karet / ban","anorganik","Setor ke pengepul."],
+ ["old clothes or fabric","Kain / pakaian bekas","anorganik","Donasikan atau daur ulang."],
+ ["an electronic device or battery","Elektronik / baterai","anorganik","Termasuk limbah B3, serahkan ke tempat khusus."],
+ ["a tin food can","Kaleng makanan","anorganik","Bilas lalu setor ke bank sampah."],
+ ["a plastic straw","Sedotan plastik","anorganik","Sulit terurai, beralih ke sedotan reusable."],
+ ["a milk carton","Kemasan karton minuman","anorganik","Lipat, bilas, dan daur ulang."],
+ ["a snack wrapper","Bungkus snack","anorganik","Buang ke sampah residu."],
+ ["a rotten fruit","Buah busuk","organik","Bagus untuk kompos."],
+ ["wood sawdust","Serbuk kayu","organik","Bisa jadi campuran kompos."],
+ ["a face mask","Masker bekas","anorganik","Gunting talinya, lalu buang ke sampah residu."],
+ ["a plastic spoon or fork","Sendok / garpu plastik","anorganik","Kurangi pemakaian sekali pakai."],
+ ["a clean empty background","Bukan sampah / tidak terlihat","bukan","Arahkan kamera lebih dekat ke satu objek sampah."],
+ ["a person","Orang (bukan sampah)","bukan","Foto objek sampahnya saja."],
+ ["a room interior","Ruangan (bukan sampah)","bukan","Foto objek sampahnya saja."]
+];
+const riwayat = [];
+const $ = id => document.getElementById(id);
+const st = $("status"), fill = $("loadfill");
+let clf = null, stream = null;
+
+(async () => {
+  try {
+    clf = await pipeline("zero-shot-image-classification", "Xenova/clip-vit-base-patch32", {
+      progress_callback: p => { if (p.status === "progress") fill.style.width = p.progress + "%"; }
+    });
+    st.textContent = "✅ Model siap. Silakan ambil atau unggah gambar.";
+    $("loadbar").style.display = "none";
+  } catch (e) {
+    st.textContent = "❌ Gagal memuat model. Periksa koneksi internet lalu muat ulang halaman.";
+    console.error(e);
+  }
+})();
+
+function mode(cam) {
+  $("tabCam").classList.toggle("on", cam); $("tabFile").classList.toggle("on", !cam);
+  $("camRow").style.display = cam ? "flex" : "none";
+  $("fileRow").style.display = cam ? "none" : "flex";
+  if (!cam) stopCam();
+}
+$("tabCam").onclick = () => mode(true);
+$("tabFile").onclick = () => mode(false);
+
+function stopCam() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = null; $("video").style.display = "none"; $("btnSnap").disabled = true;
+}
+$("btnStart").onclick = async () => {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+    const v = $("video"); v.srcObject = stream; v.style.display = "block";
+    $("preview").style.display = "none"; $("hint").style.display = "none";
+    $("btnSnap").disabled = false;
+  } catch (e) {
+    alert("Kamera tidak bisa diakses. Izinkan akses kamera atau gunakan tab Unggah File.");
+  }
+};
+$("btnSnap").onclick = () => {
+  const v = $("video"), c = $("preview");
+  c.width = v.videoWidth; c.height = v.videoHeight;
+  c.getContext("2d").drawImage(v, 0, 0);
+  c.style.display = "block"; v.style.display = "none";
+  stopCam(); detect(c.toDataURL("image/jpeg", .9));
+};
+$("btnPick").onclick = () => $("file").click();
+$("file").onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      const c = $("preview"); c.width = img.width; c.height = img.height;
+      c.getContext("2d").drawImage(img, 0, 0);
+      c.style.display = "block"; $("hint").style.display = "none";
+      detect(r.result);
+    };
+    img.src = r.result;
+  };
+  r.readAsDataURL(f); e.target.value = "";
+};
+
+function renderRiwayat() {
+  const h = $("history");
+  if (!riwayat.length) { h.style.display = "none"; return; }
+  h.style.display = "block";
+  h.innerHTML = "<b>Riwayat deteksi</b>" + riwayat.map(r =>
+    `<div class="hist"><span>${r.id} <small>(${r.jenis})</small></span><small>${(r.sc * 100).toFixed(0)}% · ${r.t}</small></div>`).join("");
+}
+
+async function detect(src) {
+  const box = $("result"); box.style.display = "block";
+  if (!clf) { box.innerHTML = "<p>Model belum siap, tunggu sebentar…</p>"; return; }
+  box.innerHTML = "<p>🔍 Menganalisis gambar…</p>";
+  try {
+    const out = await clf(src, D.map(d => d[0]), { hypothesis_template: "a photo of {}." });
+    out.sort((a, b) => b.score - a.score);
+    const get = l => D.find(d => d[0] === l);
+    const [en, id, jenis, tip] = get(out[0].label);
+    const sc = out[0].score;
+    const top = out.slice(0, 3).map(o => {
+      const d = get(o.label), p = (o.score * 100).toFixed(1);
+      return `<div class="top"><span>${d[1]}</span><div class="bar"><i style="width:${p}%"></i></div><b>${p}%</b></div>`;
+    }).join("");
+    if (jenis !== "bukan") { riwayat.unshift({ id, jenis, sc, t: new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) }); riwayat.length = Math.min(riwayat.length, 5); }
+    box.innerHTML = `
+      <span class="badge ${jenis}">${jenis === "organik" ? "🌿 Sampah Organik" : jenis === "anorganik" ? "🧴 Sampah Anorganik" : "❔ Tidak terdeteksi sampah"}</span>
+      <div class="name">${id}</div>
+      <p class="tip">${tip}</p>
+      <div><small>Keyakinan model: <b>${(sc * 100).toFixed(1)}%</b> · 3 tebakan teratas</small>${top}</div>
+      ${sc < 0.4 ? '<div class="warn">⚠️ Keyakinan rendah. Coba foto lebih dekat, terang, dan dengan satu objek saja.</div>' : ""}`;
+    renderRiwayat();
+  } catch (e) {
+    box.innerHTML = "<p>❌ Terjadi kesalahan saat mendeteksi.</p>"; console.error(e);
+  }
+}
+</script>
+</body>
+</html>

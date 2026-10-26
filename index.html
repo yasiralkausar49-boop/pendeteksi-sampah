@@ -39,6 +39,14 @@ video,#preview{max-width:100%;max-height:360px;display:none}
 .top .bar{flex:1;margin:0}
 .top b{flex:0 0 46px;text-align:right}
 .warn{background:#fff3cd;color:#664d03;border-radius:10px;padding:8px 12px;margin-top:12px;font-size:.9rem}
+.fb{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap}
+.fb span{color:var(--mut);font-size:.9rem;flex:1 1 100%}
+.fb button{flex:1}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:10px 0;text-align:center}
+.stats div{background:var(--bg);border-radius:10px;padding:8px}
+.stats b{display:block;font-size:1.3rem}
+.stats small{color:var(--mut)}
+input[type=text]{width:100%;font:inherit;padding:10px 12px;border-radius:10px;border:1px solid var(--bd);background:var(--card);color:var(--tx)}
 footer{color:var(--mut);font-size:.8rem;text-align:center}
 </style>
 </head>
@@ -56,6 +64,7 @@ footer{color:var(--mut);font-size:.8rem;text-align:center}
   <div class="tabs">
     <button id="tabCam" class="on">📷 Kamera</button>
     <button id="tabFile">🖼️ Unggah File</button>
+    <button id="tabTxt">⌨️ Ketik</button>
   </div>
   <div class="stage">
     <video id="video" autoplay playsinline muted></video>
@@ -66,6 +75,10 @@ footer{color:var(--mut);font-size:.8rem;text-align:center}
     <button id="btnStart">Nyalakan Kamera</button>
     <button id="btnSnap" class="main" disabled>Ambil &amp; Deteksi</button>
   </div>
+  <div class="row" id="txtRow" style="display:none">
+    <input type="text" id="txt" placeholder="Ketik nama sampah, mis. kulit jeruk / plastic bottle">
+    <button id="btnTxt" class="main" style="flex:0 0 auto">Klasifikasi</button>
+  </div>
   <div class="row" id="fileRow" style="display:none">
     <input type="file" id="file" accept="image/*" hidden>
     <button id="btnPick" class="main">Pilih Gambar &amp; Deteksi</button>
@@ -74,11 +87,12 @@ footer{color:var(--mut);font-size:.8rem;text-align:center}
 
 <div class="card" id="result" style="display:none"></div>
 <div class="card" id="history" style="display:none"></div>
-<footer>Model: CLIP (zero-shot) via Transformers.js · Hasil berupa perkiraan, tinggi skor tidak selalu berarti benar.</footer>
+<div class="card" id="stats" style="display:none"></div>
+<footer>Model: CLIP (zero-shot) via Transformers.js · Hasil berupa perkiraan, tinggi skor tidak selalu berarti benar. Data evaluasi disimpan di browser Anda.</footer>
 </main>
 
 <script type="module">
-import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2";
+import { pipeline, env, AutoTokenizer, CLIPTextModelWithProjection } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2";
 env.allowLocalModels = false;
 
 // [label Inggris untuk model, nama Indonesia, jenis, saran]
@@ -107,6 +121,7 @@ const D = [
  ["a rubber tire or rubber","Karet / ban","anorganik","Setor ke pengepul."],
  ["old clothes or fabric","Kain / pakaian bekas","anorganik","Donasikan atau daur ulang."],
  ["an electronic device or battery","Elektronik / baterai","anorganik","Termasuk limbah B3, serahkan ke tempat khusus."],
+ ["a plastic bottle of lotion or shampoo","Botol lotion / sampo","anorganik","Habiskan isinya, bilas, lalu setor ke bank sampah."],
  ["a tin food can","Kaleng makanan","anorganik","Bilas lalu setor ke bank sampah."],
  ["a plastic straw","Sedotan plastik","anorganik","Sulit terurai, beralih ke sedotan reusable."],
  ["a milk carton","Kemasan karton minuman","anorganik","Lipat, bilas, dan daur ulang."],
@@ -137,14 +152,16 @@ let clf = null, stream = null;
   }
 })();
 
-function mode(cam) {
-  $("tabCam").classList.toggle("on", cam); $("tabFile").classList.toggle("on", !cam);
-  $("camRow").style.display = cam ? "flex" : "none";
-  $("fileRow").style.display = cam ? "none" : "flex";
-  if (!cam) stopCam();
+function mode(m) {
+  $("tabCam").classList.toggle("on", m === "cam"); $("tabFile").classList.toggle("on", m === "file"); $("tabTxt").classList.toggle("on", m === "txt");
+  $("camRow").style.display = m === "cam" ? "flex" : "none";
+  $("fileRow").style.display = m === "file" ? "flex" : "none";
+  $("txtRow").style.display = m === "txt" ? "flex" : "none";
+  if (m !== "cam") stopCam();
 }
-$("tabCam").onclick = () => mode(true);
-$("tabFile").onclick = () => mode(false);
+$("tabCam").onclick = () => mode("cam");
+$("tabFile").onclick = () => mode("file");
+$("tabTxt").onclick = () => mode("txt");
 
 function stopCam() {
   if (stream) stream.getTracks().forEach(t => t.stop());
@@ -165,7 +182,7 @@ $("btnSnap").onclick = () => {
   c.width = v.videoWidth; c.height = v.videoHeight;
   c.getContext("2d").drawImage(v, 0, 0);
   c.style.display = "block"; v.style.display = "none";
-  stopCam(); detect(c.toDataURL("image/jpeg", .9));
+  stopCam(); detect(c.toDataURL("image/jpeg", .9), "kamera");
 };
 $("btnPick").onclick = () => $("file").click();
 $("file").onchange = e => {
@@ -177,7 +194,7 @@ $("file").onchange = e => {
       const c = $("preview"); c.width = img.width; c.height = img.height;
       c.getContext("2d").drawImage(img, 0, 0);
       c.style.display = "block"; $("hint").style.display = "none";
-      detect(r.result);
+      detect(r.result, "file");
     };
     img.src = r.result;
   };
@@ -192,7 +209,64 @@ function renderRiwayat() {
     `<div class="hist"><span>${r.id} <small>(${r.jenis})</small></span><small>${(r.sc * 100).toFixed(0)}% · ${r.t}</small></div>`).join("");
 }
 
-async function detect(src) {
+// ---------- Log & statistik (disimpan di browser) ----------
+let log = [];
+try { log = JSON.parse(localStorage.getItem("sampah_log") || "[]"); } catch (e) {}
+const simpan = () => { try { localStorage.setItem("sampah_log", JSON.stringify(log)); } catch (e) {} };
+let terakhir = null;
+
+function renderStats() {
+  const b = $("stats"), nilai = log.filter(x => x.benar !== null);
+  if (!nilai.length) { b.style.display = "none"; return; }
+  b.style.display = "block";
+  const ok = nilai.filter(x => x.benar), salah = nilai.filter(x => !x.benar);
+  const avg = a => a.length ? (a.reduce((t, x) => t + x.sc, 0) / a.length * 100).toFixed(0) + "%" : "-";
+  b.innerHTML = `<b>Statistik evaluasi</b>
+    <div class="stats"><div><b>${nilai.length}</b><small>dinilai</small></div>
+    <div><b>${(ok.length / nilai.length * 100).toFixed(0)}%</b><small>akurasi</small></div>
+    <div><b>${salah.length}</b><small>salah</small></div></div>
+    <small>Rata-rata skor saat benar: <b>${avg(ok)}</b> · saat salah: <b>${avg(salah)}</b></small>
+    <div class="row"><button id="btnCsv">⬇️ Ekspor CSV</button><button id="btnReset">🗑️ Reset</button></div>`;
+  $("btnCsv").onclick = () => {
+    const rows = ["waktu,sumber,hasil,jenis,skor,benar"].concat(log.map(x =>
+      [x.waktu, x.sumber, x.id, x.jenis, (x.sc * 100).toFixed(1), x.benar === null ? "" : x.benar ? "ya" : "tidak"].join(",")));
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([rows.join("\n")], { type: "text/csv" }));
+    a.download = "hasil-deteksi-sampah.csv"; a.click();
+  };
+  $("btnReset").onclick = () => { if (confirm("Hapus semua data evaluasi?")) { log = []; simpan(); renderStats(); } };
+}
+renderStats();
+
+function nilai(ok) {
+  if (!terakhir) return;
+  terakhir.benar = ok; simpan(); renderStats();
+  $("fbBox").innerHTML = `<span>Terima kasih, penilaian tersimpan (${ok ? "benar" : "salah"}).</span>`;
+  terakhir = null;
+}
+
+function tampil(id, jenis, sc, tip, topHtml, sumber, infoSkor) {
+  const box = $("result");
+  const entri = { waktu: new Date().toLocaleString("id-ID"), sumber, id, jenis, sc, benar: null };
+  if (jenis !== "bukan") {
+    log.push(entri); simpan(); terakhir = entri;
+    riwayat.unshift({ id, jenis, sc, t: new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) });
+    riwayat.length = Math.min(riwayat.length, 5);
+  }
+  box.innerHTML = `
+    <span class="badge ${jenis}">${jenis === "organik" ? "🌿 Sampah Organik" : jenis === "anorganik" ? "🧴 Sampah Anorganik" : "❔ Tidak terdeteksi sampah"}</span>
+    <div class="name">${id}</div>
+    <p class="tip">${tip}</p>
+    <div><small>${infoSkor}</small>${topHtml}</div>
+    ${sc < 0.4 && sumber !== "kamus" ? '<div class="warn">⚠️ Keyakinan rendah. Coba lebih jelas, terang, dan dengan satu objek saja.</div>' : ""}
+    ${jenis !== "bukan" ? '<div class="fb" id="fbBox"><span>Apakah hasil ini benar?</span><button id="btnOk">✅ Benar</button><button id="btnNo">❌ Salah</button></div>' : ""}`;
+  if (jenis !== "bukan") { $("btnOk").onclick = () => nilai(true); $("btnNo").onclick = () => nilai(false); }
+  renderRiwayat();
+}
+
+const topBar = (nama, p) => `<div class="top"><span>${nama}</span><div class="bar"><i style="width:${p}%"></i></div><b>${p}%</b></div>`;
+
+async function detect(src, sumber) {
   const box = $("result"); box.style.display = "block";
   if (!clf) { box.innerHTML = "<p>Model belum siap, tunggu sebentar…</p>"; return; }
   box.innerHTML = "<p>🔍 Menganalisis gambar…</p>";
@@ -201,23 +275,61 @@ async function detect(src) {
     out.sort((a, b) => b.score - a.score);
     const get = l => D.find(d => d[0] === l);
     const [en, id, jenis, tip] = get(out[0].label);
-    const sc = out[0].score;
-    const top = out.slice(0, 3).map(o => {
-      const d = get(o.label), p = (o.score * 100).toFixed(1);
-      return `<div class="top"><span>${d[1]}</span><div class="bar"><i style="width:${p}%"></i></div><b>${p}%</b></div>`;
-    }).join("");
-    if (jenis !== "bukan") { riwayat.unshift({ id, jenis, sc, t: new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) }); riwayat.length = Math.min(riwayat.length, 5); }
-    box.innerHTML = `
-      <span class="badge ${jenis}">${jenis === "organik" ? "🌿 Sampah Organik" : jenis === "anorganik" ? "🧴 Sampah Anorganik" : "❔ Tidak terdeteksi sampah"}</span>
-      <div class="name">${id}</div>
-      <p class="tip">${tip}</p>
-      <div><small>Keyakinan model: <b>${(sc * 100).toFixed(1)}%</b> · 3 tebakan teratas</small>${top}</div>
-      ${sc < 0.4 ? '<div class="warn">⚠️ Keyakinan rendah. Coba foto lebih dekat, terang, dan dengan satu objek saja.</div>' : ""}`;
-    renderRiwayat();
+    const top = out.slice(0, 3).map(o => topBar(get(o.label)[1], (o.score * 100).toFixed(1))).join("");
+    tampil(id, jenis, out[0].score, tip, top, sumber || "gambar", `Keyakinan model: <b>${(out[0].score * 100).toFixed(1)}%</b> · 3 tebakan teratas`);
   } catch (e) {
     box.innerHTML = "<p>❌ Terjadi kesalahan saat mendeteksi.</p>"; console.error(e);
   }
 }
+
+// ---------- Input teks ----------
+// 1) cocokkan dengan nama Indonesia; 2) jika tidak ada, pakai teks encoder CLIP (bahasa Inggris)
+let tok = null, tm = null, labelEmb = null;
+const kata = t => t.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 4);
+const dot = (a, b) => a.reduce((t, x, i) => t + x * b[i], 0);
+
+async function embed(teks) {
+  const inp = tok(teks, { padding: true, truncation: true });
+  const { text_embeds } = await tm(inp);
+  return text_embeds.normalize().tolist();
+}
+
+$("btnTxt").onclick = async () => {
+  const q = $("txt").value.trim().toLowerCase(); if (!q) return;
+  const box = $("result"); box.style.display = "block"; box.innerHTML = "<p>🔍 Mengklasifikasikan teks…</p>";
+  const kandidat = D.filter(d => d[2] !== "bukan");
+  const kq = kata(q);
+  const skor = kandidat.map(d => {
+    const nama = d[1].toLowerCase();
+    let n = (nama.includes(q) || q.includes(nama)) ? 10 : 0;
+    n += kata(nama).filter(w => kq.includes(w)).length;
+    return [d, n];
+  }).filter(x => x[1] > 0).sort((a, b) => b[1] - a[1]);
+  if (skor.length) {
+    const [id, , jenis, tip] = [skor[0][0][1], 0, skor[0][0][2], skor[0][0][3]];
+    const lain = skor.slice(1, 3).map(x => `<div class="top"><span>${x[0][1]}</span><b></b></div>`).join("");
+    tampil(id, jenis, 1, tip, lain ? "<small>Kemungkinan lain:</small>" + lain : "", "kamus", "Cocok dengan nama pada daftar kelas");
+    return;
+  }
+  try {
+    if (!tm) {
+      box.innerHTML = "<p>⏳ Memuat model teks (pertama kali saja)…</p>";
+      tok = await AutoTokenizer.from_pretrained("Xenova/clip-vit-base-patch32");
+      tm = await CLIPTextModelWithProjection.from_pretrained("Xenova/clip-vit-base-patch32");
+      labelEmb = await embed(kandidat.map(d => "a photo of " + d[0]));
+    }
+    const [qe] = await embed(["a photo of " + q]);
+    const logit = labelEmb.map(e => dot(qe, e) * 100), mx = Math.max(...logit);
+    const ex = logit.map(l => Math.exp(l - mx)), sum = ex.reduce((a, b) => a + b, 0);
+    const hasil = kandidat.map((d, i) => [d, ex[i] / sum]).sort((a, b) => b[1] - a[1]);
+    const [d0, sc] = hasil[0];
+    tampil(d0[1], d0[2], sc, d0[3], hasil.slice(0, 3).map(h => topBar(h[0][1], (h[1] * 100).toFixed(1))).join(""), "teks",
+      `Kemiripan teks dengan daftar kelas: <b>${(sc * 100).toFixed(1)}%</b> (paling baik dengan bahasa Inggris)`);
+  } catch (e) {
+    box.innerHTML = "<p>❌ Gagal memproses teks. Coba nama dalam bahasa Indonesia yang ada di daftar kelas.</p>"; console.error(e);
+  }
+};
+$("txt").addEventListener("keydown", e => { if (e.key === "Enter") $("btnTxt").click(); });
 </script>
 </body>
 </html>
